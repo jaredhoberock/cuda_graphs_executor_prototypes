@@ -173,6 +173,10 @@ class basic_kernel_executor
       {
         // get the right type of allocator to deallocate the object
         // XXX this assumes that Allocator is default-constructible
+        //     a way around this might be to pass a pointer to a 
+        //     self-deallocating object to the callback
+        //     the object could contain the appropriate allocator
+        //     to do the deallocation
         std::allocator_traits<Allocator>::template rebind_alloc<T> allocator = Allocator{};
 
         // create the appropriate type of deleter
