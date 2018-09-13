@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <iostream>
 
 
 template<class T>
@@ -19,6 +20,11 @@ class managed_allocator
     {}
 
     managed_allocator(const managed_allocator&) = default;
+
+    template<class U>
+    managed_allocator(const managed_allocator<U>& other)
+      : device_(other.device())
+    {}
 
     bool operator==(const managed_allocator& other) const
     {
@@ -51,11 +57,16 @@ class managed_allocator
 
       if(auto error = cudaFree(ptr))
       {
-        std::cerr << "managed_allocator::allocate: CUDA error after cudaFree: " << cudaGetErrorString(error) << std::endl;
+        std::cerr << "managed_allocator::deallocate: CUDA error after cudaFree: " << cudaGetErrorString(error) << std::endl;
         std::terminate();
       }
 
       set_device(old_device);
+    }
+
+    int device() const
+    {
+      return device_;
     }
 
   private:

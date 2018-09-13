@@ -2,11 +2,67 @@
 
 #include <type_traits>
 #include <memory>
+#include <thread>
+
+#include <managed_allocator.hpp>
+#include <grid_index.hpp>
+#include <cuda_context.hpp>
+
+#define __KERNEL_EXECUTOR_REQUIRES(...) typename std::enable_if<(__VA_ARGS__)>::type* = nullptr
 
 namespace detail
 {
 namespace basic_kernel_executor_detail
 {
+
+// this function object is a "deleter" which destroys and
+// deallocates its argument using the stored allocator
+template<class Allocator>
+struct delete_with_allocator
+{
+  using pointer = typename std::allocator_traits<
+    Allocator
+  >::pointer;
+
+  delete_with_allocator(const Allocator& allocator)
+    : allocator_(allocator)
+  {}
+
+  void operator()(pointer ptr)
+  {
+    // destroy the object
+    std::allocator_traits<Allocator>::destroy(allocator_, ptr);
+
+    // deallocate the storage
+    allocator_.deallocate(ptr, 1);
+  }
+
+  Allocator allocator_;
+};
+
+
+template<class Empty>
+struct empty_ptr : public Empty
+{
+  __host__ __device__
+  const Empty& operator*() const
+  {
+    return *this;
+  }
+
+  __host__ __device__
+  Empty& operator*()
+  {
+    return *this;
+  }
+
+  // mimic this part of unique_ptr<Empty>'s interface
+  __host__ __device__
+  empty_ptr<Empty> get() const
+  {
+    return *this;
+  }
+};
 
 
 template<class T,
@@ -37,23 +93,26 @@ __device__ void synchronize_block_and_destroy_if_nontrivial(T& object)
 
 template<class Factory,
          __KERNEL_EXECUTOR_REQUIRES(
-           std::is_empty<typename std::result_of<Factory()>::type>
+           std::is_empty<
+             typename std::result_of<Factory()>::type
+           >::value
          )>
-__device__ decltype(Factory()) synchronize_block_and_make_inner_shared_object(Factory)
+__device__ typename std::result_of<Factory()>::type*
+  make_inner_shared_object_and_synchronize_block(Factory)
 {
-  using result_type = typename std::result_of<Factory()>::type;
-
-  // the result of the Factory is an empty type
-  // so there's no reason to actually call the factory or put its result into __shared__ memory
-  return result_type{};
+  // the inner shared object is empty, so there's no need to create one
+  return nullptr;
 }
 
 
 template<class Factory,
          __KERNEL_EXECUTOR_REQUIRES(
-           !std::is_empty<typename std::result_of<Factory()>::type>
+           !std::is_empty<
+             typename std::result_of<Factory()>::type
+           >::value
          )>
-__device__ decltype(Factory())& make_inner_shared_object_and_synchronize_block(Factory factory)
+__device__ typename std::result_of<Factory()>::type*
+  make_inner_shared_object_and_synchronize_block(Factory factory)
 {
   using result_type = typename std::result_of<Factory()>::type;
 
@@ -69,18 +128,19 @@ __device__ decltype(Factory())& make_inner_shared_object_and_synchronize_block(F
   __syncthreads();
 
   // note that we return a reference from this function
-  return *reinterpret_cast<result_type*>(&result_storage);
+  return reinterpret_cast<result_type*>(&result_storage);
 }
 
 
-template<class Index, class Function, class Pointer, class InnerFactory>
+template<class Function, class Pointer, class InnerFactory>
 __global__ void kernel(Function f, Pointer outer_shared_ptr, InnerFactory inner_shared_factory)
 {
   // create the index
-  Index idx(blockIdx, threadIdx);
+  grid_index idx{blockIdx, threadIdx};
 
   // create the inner shared object
-  auto& inner_shared_object = make_inner_shared_object_and_synchronize_block(inner_shared_factory);
+  auto* inner_shared_object_ptr = make_inner_shared_object_and_synchronize_block(inner_shared_factory);
+  auto& inner_shared_object = *inner_shared_object_ptr;
 
   // get the outer shared object
   auto& outer_shared_object = *outer_shared_ptr;
@@ -97,39 +157,44 @@ __global__ void kernel(Function f, Pointer outer_shared_ptr, InnerFactory inner_
 } // end detail
 
 
-template<class Shape, class Allocator>
+template<class Allocator>
 class basic_kernel_executor
 {
   public:
-    basic_kernel_executor(cudaStream_t stream, const Allocator& allocator = Allocator())
-      : stream_(stream),
+    basic_kernel_executor(cuda_context& context, cudaStream_t stream, const Allocator& allocator = Allocator())
+      : context_(context),
+        stream_(stream),
         allocator_(allocator)
     {}
 
     template<class Function, class OuterFactory, class InnerFactory>
-    void bulk_execute(Function f, Shape shape, OuterFactory outer_shared_factory, InnerFactory inner_shared_factory) const
+    void bulk_execute(Function f, grid_index shape, OuterFactory outer_shared_factory, InnerFactory inner_shared_factory) const
     {
       // allocate the outer shared parameter
       auto outer_shared_object_ptr = make_outer_shared_object(outer_shared_factory);
 
       // pack parameter addresses into an array
-      void* parameter_array[] = {&f, &outer_shared_factory.get(), &inner_shared_factory};
+      auto raw_outer_shared_object_ptr = outer_shared_object_ptr.get();
+      void* parameter_array[] = {&f, &raw_outer_shared_object_ptr, &inner_shared_factory};
+
+      // instantiate the kernel
+      void* kernel_ptr = reinterpret_cast<void*>(&detail::basic_kernel_executor_detail::kernel<Function, decltype(raw_outer_shared_object_ptr), InnerFactory>);
 
       // launch the kernel
-      if(auto error = cudaLaunchKernel(kernel_ptr, std::get<0>(shape), std::get<1>(shape), parameter_array, 0, stream_))
+      if(auto error = cudaLaunchKernel(kernel_ptr, shape[0], shape[1], parameter_array, 0, stream_))
       {
         throw std::runtime_error("basic_kernel_executor::bulk_execute: CUDA error after cudaLaunchKernel: " + std::string(cudaGetErrorString(error)));
       }
 
-      // create a stream callback to delete the outer shared parameter
-      cudaStreamCallback_t callback = &delete_on_new_thread<outer_shared_object_ptr::element_type>;
-      auto* raw_ptr = outer_shared_object_ptr.release();
-      if(auto error = cudaStreamAddCallback(stream_, callback, raw_ptr, 0))
-      {
-        // put the raw pointer back into the unique_ptr
-        outer_shared_object_ptr.reset(raw_ptr);
+      // destroy the outer shared parameter after the kernel completes
+      schedule_outer_shared_object_for_deletion(std::move(outer_shared_object_ptr));
+    }
 
-        throw std::runtime_error("basic_kernel_executor::bulk_execute: CUDA error after cudaStreamAddCallback: " + std::string(cudaGetErrorString(error)));
+    void wait() const
+    {
+      if(auto error = cudaStreamSynchronize(stream_))
+      {
+        throw std::runtime_error("basic_kernel_executor::wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
       }
     }
 
@@ -144,62 +209,47 @@ class basic_kernel_executor
     }
 
   private:
-    // this function object is a "deleter" which destroys and
-    // deallocates its argument using the stored allocator
-    template<class Allocator>
-    struct delete_with_allocator
+    template<class T, class Deleter>
+    void schedule_outer_shared_object_for_deletion(std::unique_ptr<T,Deleter> ptr) const
     {
-      using pointer = typename std::allocator_traits<
-        Allocator
-      >::pointer;
-
-      void operator()(pointer ptr)
+      // tell the context to destroy the outer shared parameter after the kernel completes
+      // XXX if the outer shared object is empty, there's no need to do this
+      cudaEvent_t event{};
+      if(auto error = cudaEventCreateWithFlags(&event, cudaEventDisableTiming))
       {
-        // destroy the object
-        std::allocator_traits<Allocator>::destroy(allocator_, ptr);
-
-        // deallocate the storage
-        allocator_.deallocate(ptr);
+        throw std::runtime_error("basic_kernel_executor::bulk_execute: CUDA error after cudaEventCreateWithFlags: " + std::string(cudaGetErrorString(error)));
       }
 
-      Allocator allocator_;
-    };
+      // decompose the unique_ptr so that the context can use a std::function to store the task
+      T* raw_ptr = ptr.release();
+      Deleter deleter = ptr.get_deleter();
+
+      // delete the pointer after the event completes 
+      // the context will destroy the event
+      context_.invoke_after(event, [=]() mutable
+      {
+        deleter(raw_ptr);
+      });
+    }
 
     template<class T>
-    static void delete_on_new_thread(cudaStream_t, cudaError_t, void* raw_ptr)
+    void schedule_outer_shared_object_for_deletion(detail::basic_kernel_executor_detail::empty_ptr<T>) const
     {
-      // delete the pointer in a thread besides the one that is executing this stream callback
-      std::thread new_thread([=raw_ptr]
-      {
-        // get the right type of allocator to deallocate the object
-        // XXX this assumes that Allocator is default-constructible
-        //     a way around this might be to pass a pointer to a 
-        //     self-deallocating object to the callback
-        //     the object could contain the appropriate allocator
-        //     to do the deallocation
-        std::allocator_traits<Allocator>::template rebind_alloc<T> allocator = Allocator{};
-
-        // create the appropriate type of deleter
-        delete_with_allocator<decltype(allocator)> deleter(allocator);
-
-        // cast the raw_ptr to the appropriate type of pointer and delete it
-        deleter(reinterpret_cast<T*>(raw_ptr));
-      });
-
-      // do not join with the thread
-      new_thread.detach();
+      // because T is an empty type, there is nothing to destroy or deallocate
     }
 
     template<class Factory,
              // figure out the type returned by the factory
              class Result = typename std::result_of<Factory()>::type,
+             // only enable this overload if Result is a non-empty type
+             __KERNEL_EXECUTOR_REQUIRES(!std::is_empty<Result>::value),
              // rebind Allocator to the appropriate type
-             class ResultAllocator = std::allocator_traits<Allocator>::template rebind_alloc<Result>,
+             class ResultAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<Result>,
              // figure out the appropriate type of Deleter
-             class Deleter = delete_with_allocator<ResultAllocator>
+             class Deleter = detail::basic_kernel_executor_detail::delete_with_allocator<ResultAllocator>
             >
-    static std::unique_ptr<Result,Deleter>
-      make_outer_shared_object(Factory factory)
+    std::unique_ptr<Result,Deleter>
+      make_outer_shared_object(Factory factory) const
     {
       // make an allocator for the result 
       ResultAllocator result_allocator = allocator_;
@@ -208,12 +258,28 @@ class basic_kernel_executor
       std::unique_ptr<Result, Deleter> result(result_allocator.allocate(1), Deleter(result_allocator));
 
       // construct the result using the result of the factory
-      result_allocator.construct(result.get(), factory());     
+      std::allocator_traits<ResultAllocator>::construct(result_allocator, result.get(), factory());     
 
       return result;
     }
 
+    template<class Factory,
+             // figure out the type returned by the factory
+             class Result = typename std::result_of<Factory()>::type,
+             // only enable this overload if Result is an empty type
+             __KERNEL_EXECUTOR_REQUIRES(std::is_empty<Result>::value)
+            >
+    detail::basic_kernel_executor_detail::empty_ptr<Result>
+      make_outer_shared_object(Factory) const
+    {
+      return detail::basic_kernel_executor_detail::empty_ptr<Result>{};
+    }
+
+    cuda_context& context_;
     cudaStream_t stream_;
     Allocator allocator_;
 };
+
+
+using kernel_executor = basic_kernel_executor<managed_allocator<int>>;
 
