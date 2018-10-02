@@ -1,6 +1,7 @@
 #pragma once
 
 #include <grid_index.hpp>
+#include <basic_sender.hpp>
 
 namespace detail
 {
@@ -67,21 +68,19 @@ class bulk_graph_executor
 
 
 template<class Function, class Sender>
-class bulk_sender
+class bulk_sender : private basic_sender<bulk_graph_executor, Function, Sender>
 {
-  public:
-    const bulk_graph_executor& executor() const
-    {
-      return executor_;
-    }
+  private:
+    using super_t = basic_sender<bulk_graph_executor, Function, Sender>;
 
+  public:
     void submit()
     {
       // create a new graph
       cudaGraph_t graph = make_graph();
 
       // launch the graph
-      detail::launch(executor().stream(), graph);
+      detail::launch(super_t::executor().stream(), graph);
 
       // destroy the graph
       if(auto error = cudaGraphDestroy(graph))
@@ -93,20 +92,23 @@ class bulk_sender
     void sync_wait() const
     {
       // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
-      if(auto error = cudaStreamSynchronize(executor().stream()))
+      if(auto error = cudaStreamSynchronize(super_t::executor().stream()))
       {
         throw std::runtime_error("bulk_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
       }
     }
 
+    using super_t::executor;
+
   private:
+    using super_t::predecessor;
+    using super_t::function;
+
     friend class bulk_graph_executor;
     template<class,class> friend class bulk_sender;
 
     bulk_sender(const bulk_graph_executor& executor, Function f, grid_index shape, Sender&& predecessor)
-      : executor_(executor),
-        function_(f),
-        predecessor_(std::move(predecessor)),
+      : super_t(executor, f, std::move(predecessor)),
         shape_(shape)
     {}
 
@@ -114,11 +116,11 @@ class bulk_sender
     cudaGraphNode_t insert(cudaGraph_t g) const
     {
       // insert the predecessor
-      cudaGraphNode_t predecessor_node = predecessor_.insert(g);
+      cudaGraphNode_t predecessor_node = predecessor().insert(g);
 
       // introduce a new kernel node
       cudaGraphNode_t result_node{};
-      void* kernel_params[] = {reinterpret_cast<void*>(const_cast<Function*>(&function_))};
+      void* kernel_params[] = {reinterpret_cast<void*>(const_cast<Function*>(&function()))};
       cudaKernelNodeParams node_params
       {
         reinterpret_cast<void*>(&detail::bulk_kernel<Function>),
@@ -153,10 +155,7 @@ class bulk_sender
       return graph;
     }
 
-    bulk_graph_executor executor_;
-    Function function_;
     grid_index shape_;
-    Sender predecessor_;
 };
 
 
