@@ -2,6 +2,7 @@
 
 #include <grid_index.hpp>
 #include <basic_sender.hpp>
+#include <stdexcept>
 
 namespace detail
 {
