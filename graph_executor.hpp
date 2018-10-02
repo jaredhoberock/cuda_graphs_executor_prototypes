@@ -60,8 +60,15 @@ template<class,class> class bulk_sender;
 class bulk_graph_executor
 {
   public:
+    bulk_graph_executor(cudaStream_t s)
+      : stream_(s)
+    {}
+
     template<class Function, class Sender>
     bulk_sender<Function,Sender> bulk_then_execute(Function f, grid_index shape, Sender& sender) const;
+
+  private:
+    cudaStream_t stream_;
 };
 
 
@@ -201,11 +208,17 @@ class bulk_sender
     friend class bulk_graph_executor;
     template<class,class> friend class bulk_sender;
 
-    bulk_sender(Function f, grid_index shape, Sender&& predecessor)
-      : function_(f),
+    bulk_sender(const bulk_graph_executor& executor, Function f, grid_index shape, Sender&& predecessor)
+      : executor_(executor),
+        function_(f),
         predecessor_(std::move(predecessor)),
         shape_(shape)
     {}
+
+    const bulk_graph_executor& executor() const
+    {
+      return executor_;
+    }
 
     // this function transliterates the chain of predecessors into a graph
     cudaGraphNode_t insert(cudaGraph_t g) const
@@ -257,6 +270,7 @@ class bulk_sender
       return graph;
     }
 
+    bulk_graph_executor executor_;
     Function function_;
     grid_index shape_;
     Sender predecessor_;
@@ -277,6 +291,6 @@ class graph_executor
 template<class Function, class Sender>
 bulk_sender<Function,Sender> bulk_graph_executor::bulk_then_execute(Function f, grid_index shape, Sender& sender) const
 {
-  return {f, shape, std::move(sender)};
+  return {*this, f, shape, std::move(sender)};
 }
 
