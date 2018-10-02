@@ -6,12 +6,18 @@ __managed__ unsigned int result;
 
 int main()
 {
+  cudaStream_t stream{};
+  if(auto error = cudaStreamCreate(&stream))
+  {
+    throw std::runtime_error("CUDA error after cudaStreamCreate(): " + std::string(cudaGetErrorString(error)));
+  }
+
   {
     // test with
     // * empty outer shared object
     // * empty inner shared object
 
-    bulk_graph_executor ex;
+    bulk_graph_executor ex(stream);
 
     void_sender start;
 
@@ -49,25 +55,9 @@ int main()
       task_a
     );
 
-    // XXX should clean up all of this and give the executor a stream
-    cudaStream_t stream{};
-    if(auto error = cudaStreamCreate(&stream))
-    {
-      throw std::runtime_error("CUDA error after cudaStreamCreate: " + std::string(cudaGetErrorString(error)));
-    }
+    task_b.submit();
 
-    task_b.submit(stream);
-
-    // XXX should implement .sync_wait() or whatever instead of explicit stream synchronization
-    if(auto error = cudaStreamSynchronize(stream))
-    {
-      throw std::runtime_error("CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
-    }
-
-    if(auto error = cudaStreamDestroy(stream))
-    {
-      throw std::runtime_error("CUDA error after cudaStreamDestroy: " + std::string(cudaGetErrorString(error)));
-    }
+    task_b.sync_wait();
 
     // compute the expected result
     unsigned int expected_result = 0;
@@ -88,6 +78,11 @@ int main()
     }
 
     assert(expected_result == result);
+  }
+
+  if(auto error = cudaStreamDestroy(stream))
+  {
+    throw std::runtime_error("CUDA error after cudaStreamDestroy(): " + std::string(cudaGetErrorString(error)));
   }
 
   std::cout << "OK" << std::endl;
