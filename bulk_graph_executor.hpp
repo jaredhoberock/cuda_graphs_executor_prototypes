@@ -18,29 +18,6 @@ __global__ void bulk_kernel(Function f)
 }
 
 
-inline void launch(cudaStream_t stream, cudaGraph_t graph)
-{
-   // instantiate the graph
-   cudaGraphExec_t executable_graph{};
-   if(auto error = cudaGraphInstantiate(&executable_graph, graph, nullptr, nullptr, 0))
-   {
-     throw std::runtime_error("detail::submit: CUDA error after cudaGraphInstantiate: " + std::string(cudaGetErrorString(error)));
-   }
-
-   // launch the graph
-   if(auto error = cudaGraphLaunch(executable_graph, stream))
-   {
-     throw std::runtime_error("detail::submit: CUDA error after cudaGraphLaunch: " + std::string(cudaGetErrorString(error)));
-   }
-
-   // delete the graph instance
-   if(auto error = cudaGraphExecDestroy(executable_graph))
-   {
-     throw std::runtime_error("detail::submit: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)));
-   }
-}
-
-
 } // end detail
 
 
@@ -68,27 +45,12 @@ class bulk_graph_executor
 
 
 template<class Function, class Sender>
-class bulk_sender : private basic_sender<bulk_graph_executor, Function, Sender>
+class bulk_sender : private basic_sender<bulk_sender<Function,Sender>, bulk_graph_executor, Function, Sender>
 {
   private:
-    using super_t = basic_sender<bulk_graph_executor, Function, Sender>;
+    using super_t = basic_sender<bulk_sender<Function,Sender>, bulk_graph_executor, Function, Sender>;
 
   public:
-    void submit()
-    {
-      // create a new graph
-      cudaGraph_t graph = make_graph();
-
-      // launch the graph
-      detail::launch(super_t::executor().stream(), graph);
-
-      // destroy the graph
-      if(auto error = cudaGraphDestroy(graph))
-      {
-        throw std::runtime_error("bulk_sender::submit: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)));
-      }
-    }
-
     void sync_wait() const
     {
       // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
@@ -99,12 +61,19 @@ class bulk_sender : private basic_sender<bulk_graph_executor, Function, Sender>
     }
 
     using super_t::executor;
+    using super_t::submit;
 
   private:
     using super_t::predecessor;
     using super_t::function;
 
+    // friend super_t so it can access insert() and downcasts
+    friend super_t;
+
+    // friend bulk_graph_executor so it can access the private ctor
     friend class bulk_graph_executor;
+
+    // friend bulk_sender so it can access insert()
     template<class,class> friend class bulk_sender;
 
     bulk_sender(const bulk_graph_executor& executor, Function f, grid_index shape, Sender&& predecessor)
@@ -137,22 +106,6 @@ class bulk_sender : private basic_sender<bulk_graph_executor, Function, Sender>
       }
 
       return result_node;
-    }
-
-    cudaGraph_t make_graph() const
-    {
-      // create a new graph
-      cudaGraph_t graph{};
-      if(auto error = cudaGraphCreate(&graph, 0))
-      {
-        throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
-      }
-
-      // insert into the graph
-      insert(graph);
-
-      // return the graph
-      return graph;
     }
 
     grid_index shape_;
