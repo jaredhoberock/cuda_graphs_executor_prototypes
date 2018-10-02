@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cassert>
 #include <graph_executor.hpp>
+#include <void_sender.hpp>
 
 int main()
 {

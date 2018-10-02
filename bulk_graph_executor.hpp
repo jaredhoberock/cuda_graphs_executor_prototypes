@@ -1,17 +1,19 @@
 #pragma once
 
 #include <grid_index.hpp>
-#include <stdexcept>
-
 
 namespace detail
 {
 
 
 template<class Function>
-__global__ void single_kernel(Function f)
+__global__ void bulk_kernel(Function f)
 {
-  f();
+  // create the index
+  grid_index idx{blockIdx, threadIdx};
+
+  // invoke f
+  f(idx);
 }
 
 
@@ -41,35 +43,71 @@ inline void launch(cudaStream_t stream, cudaGraph_t graph)
 } // end detail
 
 
-class graph_executor;
+template<class,class> class bulk_sender;
+
+
+class bulk_graph_executor
+{
+  public:
+    bulk_graph_executor(cudaStream_t s)
+      : stream_(s)
+    {}
+
+    template<class Function, class Sender>
+    bulk_sender<Function,Sender> bulk_then_execute(Function f, grid_index shape, Sender& sender) const;
+
+    cudaStream_t stream() const
+    {
+      return stream_;
+    }
+
+  private:
+    cudaStream_t stream_;
+};
 
 
 template<class Function, class Sender>
-class single_sender
+class bulk_sender
 {
   public:
-    void submit(cudaStream_t stream)
+    const bulk_graph_executor& executor() const
+    {
+      return executor_;
+    }
+
+    void submit()
     {
       // create a new graph
       cudaGraph_t graph = make_graph();
 
       // launch the graph
-      detail::launch(stream, graph);
+      detail::launch(executor().stream(), graph);
 
       // destroy the graph
       if(auto error = cudaGraphDestroy(graph))
       {
-        throw std::runtime_error("CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)));
+        throw std::runtime_error("bulk_sender::submit: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)));
+      }
+    }
+
+    void sync_wait() const
+    {
+      // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
+      if(auto error = cudaStreamSynchronize(executor().stream()))
+      {
+        throw std::runtime_error("bulk_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
       }
     }
 
   private:
-    friend class graph_executor;
-    template<class,class> friend class single_sender;
+    friend class bulk_graph_executor;
+    template<class,class> friend class bulk_sender;
 
-    single_sender(Function f, Sender&& predecessor)
-      : function_(f),
-        predecessor_(std::move(predecessor))
+    bulk_sender(const bulk_graph_executor& executor, Function f, grid_index shape, Sender&& predecessor)
+      : executor_(executor),
+        function_(f),
+        predecessor_(std::move(predecessor)),
+        shape_(shape)
     {}
 
     // this function transliterates the chain of predecessors into a graph
@@ -83,9 +121,9 @@ class single_sender
       void* kernel_params[] = {reinterpret_cast<void*>(const_cast<Function*>(&function_))};
       cudaKernelNodeParams node_params
       {
-        reinterpret_cast<void*>(&detail::single_kernel<Function>),
-        dim3{1},
-        dim3{1},
+        reinterpret_cast<void*>(&detail::bulk_kernel<Function>),
+        shape_[0],
+        shape_[1],
         0,
         kernel_params,
         nullptr
@@ -93,12 +131,8 @@ class single_sender
 
       if(auto error = cudaGraphAddKernelNode(&result_node, g, &predecessor_node, 1, &node_params))
       {
-        throw std::runtime_error("CUDA error after cudaGraphAddKernelNode: " + std::string(cudaGetErrorString(error)));
+        throw std::runtime_error("bulk_sender::insert: CUDA error after cudaGraphAddKernelNode: " + std::string(cudaGetErrorString(error)));
       }
-
-      // discard the predecessor node
-      // XXX not sure if this is best practice or not
-      //     seems like a leak
 
       return result_node;
     }
@@ -113,38 +147,22 @@ class single_sender
       }
 
       // insert into the graph
-      // discard the returned node
-      // XXX not sure if this is best practice or not
-      //     seems like a leak
       insert(graph);
 
       // return the graph
       return graph;
     }
 
-    static void invoke_host_function(void* user_data)
-    {
-      // cast the user data into a Function
-      Function* function = reinterpret_cast<Function*>(user_data);
-
-      // invoke the function
-      (*function)();
-
-      // delete function
-      delete function;
-    }
-
+    bulk_graph_executor executor_;
     Function function_;
+    grid_index shape_;
     Sender predecessor_;
 };
 
-class graph_executor
+
+template<class Function, class Sender>
+bulk_sender<Function,Sender> bulk_graph_executor::bulk_then_execute(Function f, grid_index shape, Sender& sender) const
 {
-  public:
-    template<class Function, class Sender>
-    single_sender<Function,Sender> then_execute(Function f, Sender& sender) const
-    {
-      return {f, std::move(sender)};
-    }
-};
+  return {*this, f, shape, std::move(sender)};
+}
 
