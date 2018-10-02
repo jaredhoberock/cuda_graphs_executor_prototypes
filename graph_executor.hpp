@@ -214,6 +214,15 @@ class bulk_sender
       }
     }
 
+    void sync_wait() const
+    {
+      // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
+      if(auto error = cudaStreamSynchronize(executor().stream()))
+      {
+        throw std::runtime_error("bulk_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
+      }
+    }
+
   private:
     friend class bulk_graph_executor;
     template<class,class> friend class bulk_sender;
