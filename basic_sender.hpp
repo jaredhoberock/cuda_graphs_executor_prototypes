@@ -15,7 +15,7 @@ class basic_sender
       cudaGraph_t graph = make_graph();
 
       // launch the graph
-      launch(executor().stream(), graph);
+      launch(graph);
 
       // destroy the graph
       if(auto error = cudaGraphDestroy(graph))
@@ -26,10 +26,14 @@ class basic_sender
 
     void sync_wait() const
     {
-      // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
-      if(auto error = cudaStreamSynchronize(executor().stream()))
+      if(!event_)
       {
-        throw std::runtime_error("basic_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
+        throw std::runtime_error("basic_sender::sync_wait: invalid state");
+      }
+
+      if(auto error = cudaEventSynchronize(event_))
+      {
+        throw std::runtime_error("basic_sender::sync_wait: CUDA error after cudaEventSynchronize: " + std::string(cudaGetErrorString(error)));
       }
     }
 
@@ -37,7 +41,8 @@ class basic_sender
     basic_sender(const CudaGraphExecutor& executor, Function function, Sender&& predecessor)
       : executor_(executor),
         function_(function),
-        predecessor_(std::move(predecessor))
+        predecessor_(std::move(predecessor)),
+        event_{}
     {}
 
     const Function& function() const
@@ -67,7 +72,7 @@ class basic_sender
       return graph;
     }
 
-    void launch(cudaStream_t stream, cudaGraph_t graph)
+    void launch(cudaGraph_t graph)
     {
        // instantiate the graph
        cudaGraphExec_t executable_graph{};
@@ -77,9 +82,21 @@ class basic_sender
        }
     
        // launch the graph
-       if(auto error = cudaGraphLaunch(executable_graph, stream))
+       if(auto error = cudaGraphLaunch(executable_graph, executor().stream()))
        {
          throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphLaunch: " + std::string(cudaGetErrorString(error)));
+       }
+
+       // create an event
+       if(auto error = cudaEventCreateWithFlags(&event_, cudaEventDisableTiming))
+       {
+         throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventCreateWithFlags: " + std::string(cudaGetErrorString(error)));
+       }
+
+       // record an event
+       if(auto error = cudaEventRecord(event_, executor().stream()))
+       {
+         throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventRecord: " + std::string(cudaGetErrorString(error)));
        }
     
        // delete the graph instance
@@ -97,5 +114,6 @@ class basic_sender
     CudaGraphExecutor executor_;
     Function function_;
     Sender predecessor_;
+    cudaEvent_t event_;
 };
 
