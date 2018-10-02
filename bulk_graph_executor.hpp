@@ -51,15 +51,6 @@ class bulk_sender : private basic_sender<bulk_sender<Function,Sender>, bulk_grap
     using super_t = basic_sender<bulk_sender<Function,Sender>, bulk_graph_executor, Function, Sender>;
 
   public:
-    void sync_wait() const
-    {
-      // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
-      if(auto error = cudaStreamSynchronize(super_t::executor().stream()))
-      {
-        throw std::runtime_error("bulk_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
-      }
-    }
-
     using super_t::executor;
     using super_t::submit;
     using super_t::sync_wait;
