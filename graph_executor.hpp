@@ -54,7 +54,15 @@ inline void launch(cudaStream_t stream, cudaGraph_t graph)
 
 class graph_executor;
 
-class bulk_graph_executor;
+template<class,class> class bulk_sender;
+
+
+class bulk_graph_executor
+{
+  public:
+    template<class Function, class Sender>
+    bulk_sender<Function,Sender> bulk_then_execute(Function f, grid_index shape, Sender& sender) const;
+};
 
 
 class void_sender
@@ -266,13 +274,9 @@ class graph_executor
 };
 
 
-class bulk_graph_executor
+template<class Function, class Sender>
+bulk_sender<Function,Sender> bulk_graph_executor::bulk_then_execute(Function f, grid_index shape, Sender& sender) const
 {
-  public:
-    template<class Function, class Sender>
-    bulk_sender<Function,Sender> bulk_then_execute(Function f, grid_index shape, Sender& sender) const
-    {
-      return {f, shape, std::move(sender)};
-    }
-};
+  return {f, shape, std::move(sender)};
+}
 
