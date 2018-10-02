@@ -62,6 +62,7 @@ class bulk_sender : private basic_sender<bulk_sender<Function,Sender>, bulk_grap
 
     using super_t::executor;
     using super_t::submit;
+    using super_t::sync_wait;
 
   private:
     using super_t::predecessor;

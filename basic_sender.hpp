@@ -1,10 +1,10 @@
 #pragma once
 
-template<class Derived, class Executor, class Function, class Sender>
+template<class Derived, class CudaGraphExecutor, class Function, class Sender>
 class basic_sender
 {
   public:
-    const Executor& executor() const
+    const CudaGraphExecutor& executor() const
     {
       return executor_;
     }
@@ -24,11 +24,17 @@ class basic_sender
       }
     }
 
-    // XXX consider adding this method if we can do so generically
-    //void sync_wait() const;
+    void sync_wait() const
+    {
+      // XXX should keep a cudaEvent_t member to avoid synchronizing the whole stream
+      if(auto error = cudaStreamSynchronize(executor().stream()))
+      {
+        throw std::runtime_error("basic_sender::sync_wait: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
+      }
+    }
 
   protected:
-    basic_sender(const Executor& executor, Function function, Sender&& predecessor)
+    basic_sender(const CudaGraphExecutor& executor, Function function, Sender&& predecessor)
       : executor_(executor),
         function_(function),
         predecessor_(std::move(predecessor))
@@ -88,7 +94,7 @@ class basic_sender
       return static_cast<const Derived&>(*this);
     }
 
-    Executor executor_;
+    CudaGraphExecutor executor_;
     Function function_;
     Sender predecessor_;
 };
