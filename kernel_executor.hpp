@@ -167,24 +167,30 @@ class basic_kernel_executor
         allocator_(allocator)
     {}
 
+    template<class GlobalFunctionPtr, class... Args>
+    void bulk_execute_global_function(GlobalFunctionPtr kernel_ptr, grid_index shape, const Args&... args) const
+    {
+      // pack parameter addresses into an array
+      void* parameter_array[] = {const_cast<Args*>(&args)...};
+
+      // launch the kernel
+      if(auto error = cudaLaunchKernel(reinterpret_cast<void*>(kernel_ptr), shape[0], shape[1], parameter_array, 0, stream_))
+      {
+        throw std::runtime_error("basic_kernel_executor::bulk_execute_global_function: CUDA error after cudaLaunchKernel: " + std::string(cudaGetErrorString(error)));
+      }
+    }
+
     template<class Function, class OuterFactory, class InnerFactory>
     void bulk_execute(Function f, grid_index shape, OuterFactory outer_shared_factory, InnerFactory inner_shared_factory) const
     {
       // allocate the outer shared parameter
       auto outer_shared_object_ptr = make_outer_shared_object(outer_shared_factory);
 
-      // pack parameter addresses into an array
-      auto raw_outer_shared_object_ptr = outer_shared_object_ptr.get();
-      void* parameter_array[] = {&f, &raw_outer_shared_object_ptr, &inner_shared_factory};
-
       // instantiate the kernel
-      void* kernel_ptr = reinterpret_cast<void*>(&detail::basic_kernel_executor_detail::kernel<Function, decltype(raw_outer_shared_object_ptr), InnerFactory>);
+      void* kernel_ptr = reinterpret_cast<void*>(&detail::basic_kernel_executor_detail::kernel<Function, decltype(outer_shared_object_ptr.get()), InnerFactory>);
 
-      // launch the kernel
-      if(auto error = cudaLaunchKernel(kernel_ptr, shape[0], shape[1], parameter_array, 0, stream_))
-      {
-        throw std::runtime_error("basic_kernel_executor::bulk_execute: CUDA error after cudaLaunchKernel: " + std::string(cudaGetErrorString(error)));
-      }
+      // execute the kernel
+      bulk_execute_global_function(kernel_ptr, shape, f, outer_shared_object_ptr.get(), inner_shared_factory);
 
       // destroy the outer shared parameter after the kernel completes
       schedule_outer_shared_object_for_deletion(std::move(outer_shared_object_ptr));

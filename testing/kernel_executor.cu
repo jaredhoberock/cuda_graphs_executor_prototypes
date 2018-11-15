@@ -6,6 +6,13 @@ __managed__ unsigned int result;
 
 struct empty {};
 
+__global__ void test_kernel(int parameter)
+{
+  unsigned int my_contribution = blockIdx.x ^ threadIdx.x ^ parameter;
+
+  atomicXor(&result, my_contribution);
+}
+
 int main()
 {
   cuda_context ctx;
@@ -178,6 +185,39 @@ int main()
       for(unsigned int j = 0; j < 10; ++j)
       {
         expected_result ^= (i ^ j);
+      }
+    }
+
+    assert(expected_result == result);
+  }
+
+  {
+    // test with __global__ function
+
+    grid_index shape{dim3(10), dim3(10)};
+
+    result = 0;
+
+    kernel_executor ex(ctx, stream);
+
+    int parameter = 13;
+
+    ex.bulk_execute_global_function(
+      test_kernel,
+      shape,
+      parameter
+    );
+
+    // wait for execution to complete
+    ex.wait();
+
+    // compute the expected result
+    unsigned int expected_result = 0;
+    for(unsigned int i = 0; i < 10; ++i)
+    {
+      for(unsigned int j = 0; j < 10; ++j)
+      {
+        expected_result ^= (i ^ j ^ parameter);
       }
     }
 
