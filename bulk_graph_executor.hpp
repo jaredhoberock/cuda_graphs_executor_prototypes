@@ -2,7 +2,10 @@
 
 #include <grid_index.hpp>
 #include <basic_sender.hpp>
+#include <kernel_sender.hpp>
 #include <stdexcept>
+#include <vector>
+
 
 namespace detail
 {
@@ -22,9 +25,6 @@ __global__ void bulk_kernel(Function f)
 } // end detail
 
 
-template<class,class> class bulk_sender;
-
-
 class bulk_graph_executor
 {
   public:
@@ -33,7 +33,34 @@ class bulk_graph_executor
     {}
 
     template<class Function, class Sender>
-    bulk_sender<Function,Sender> bulk_then_execute(Function f, grid_index shape, Sender& sender) const;
+    kernel_sender bulk_then_execute(Function f, grid_index shape, Sender& predecessor) const
+    {
+      // we need to capture this array by value into the lambda below
+      // so that it becomes a member of the lambda
+      void* kernel_params[] = {nullptr};
+
+      auto node_parameters_function = [=]() mutable
+      {
+        // XXX &f is an address of a member of this lambda because we captured f by value
+        kernel_params[0] = (void*)&f;
+
+        cudaKernelNodeParams result
+        {
+          reinterpret_cast<void*>(&detail::bulk_kernel<Function>),
+          shape[0], // gridDim
+          shape[1], // blockDim
+          0,
+
+          // XXX note that we're returning addresses which point into this lambda object here
+          kernel_params,
+          nullptr
+        };
+
+        return result;
+      };
+
+      return {stream(), node_parameters_function, std::move(predecessor)};
+    }
 
     cudaStream_t stream() const
     {
@@ -43,71 +70,4 @@ class bulk_graph_executor
   private:
     cudaStream_t stream_;
 };
-
-
-template<class Function, class Sender>
-class bulk_sender : private basic_sender<bulk_sender<Function,Sender>, bulk_graph_executor, Function, Sender>
-{
-  private:
-    using super_t = basic_sender<bulk_sender<Function,Sender>, bulk_graph_executor, Function, Sender>;
-
-  public:
-    using super_t::executor;
-    using super_t::submit;
-    using super_t::sync_wait;
-
-  private:
-    using super_t::predecessor;
-    using super_t::function;
-
-    // friend super_t so it can access insert() and downcasts
-    friend super_t;
-
-    // friend bulk_graph_executor so it can access the private ctor
-    friend class bulk_graph_executor;
-
-    // friend bulk_sender so it can access insert()
-    template<class,class> friend class bulk_sender;
-
-    bulk_sender(const bulk_graph_executor& executor, Function f, grid_index shape, Sender&& predecessor)
-      : super_t(executor, f, std::move(predecessor)),
-        shape_(shape)
-    {}
-
-    // this function transliterates the chain of predecessors into a graph
-    cudaGraphNode_t insert(cudaGraph_t g) const
-    {
-      // insert the predecessor
-      cudaGraphNode_t predecessor_node = predecessor().insert(g);
-
-      // introduce a new kernel node
-      cudaGraphNode_t result_node{};
-      void* kernel_params[] = {reinterpret_cast<void*>(const_cast<Function*>(&function()))};
-      cudaKernelNodeParams node_params
-      {
-        reinterpret_cast<void*>(&detail::bulk_kernel<Function>),
-        shape_[0],
-        shape_[1],
-        0,
-        kernel_params,
-        nullptr
-      };
-
-      if(auto error = cudaGraphAddKernelNode(&result_node, g, &predecessor_node, 1, &node_params))
-      {
-        throw std::runtime_error("bulk_sender::insert: CUDA error after cudaGraphAddKernelNode: " + std::string(cudaGetErrorString(error)));
-      }
-
-      return result_node;
-    }
-
-    grid_index shape_;
-};
-
-
-template<class Function, class Sender>
-bulk_sender<Function,Sender> bulk_graph_executor::bulk_then_execute(Function f, grid_index shape, Sender& sender) const
-{
-  return {*this, f, shape, std::move(sender)};
-}
 

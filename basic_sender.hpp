@@ -1,14 +1,11 @@
 #pragma once
 
-template<class Derived, class CudaGraphExecutor, class Function, class Sender>
+#include <stdexcept>
+
+template<class Derived>
 class basic_sender
 {
   public:
-    const CudaGraphExecutor& executor() const
-    {
-      return executor_;
-    }
-
     void submit()
     {
       // create a new graph
@@ -38,22 +35,13 @@ class basic_sender
     }
 
   protected:
-    basic_sender(const CudaGraphExecutor& executor, Function function, Sender&& predecessor)
-      : executor_(executor),
-        function_(function),
-        predecessor_(std::move(predecessor)),
+    basic_sender() = default;
+    basic_sender(const basic_sender&) = default;
+
+    basic_sender(cudaStream_t stream)
+      : stream_(stream),
         event_{}
     {}
-
-    const Function& function() const
-    {
-      return function_;
-    }
-
-    const Sender& predecessor() const
-    {
-      return predecessor_;
-    }
 
   private:
     cudaGraph_t make_graph() const
@@ -74,36 +62,36 @@ class basic_sender
 
     void launch(cudaGraph_t graph)
     {
-       // instantiate the graph
-       cudaGraphExec_t executable_graph{};
-       if(auto error = cudaGraphInstantiate(&executable_graph, graph, nullptr, nullptr, 0))
-       {
-         throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphInstantiate: " + std::string(cudaGetErrorString(error)));
-       }
-    
-       // launch the graph
-       if(auto error = cudaGraphLaunch(executable_graph, executor().stream()))
-       {
-         throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphLaunch: " + std::string(cudaGetErrorString(error)));
-       }
+      // instantiate the graph
+      cudaGraphExec_t executable_graph{};
+      if(auto error = cudaGraphInstantiate(&executable_graph, graph, nullptr, nullptr, 0))
+      {
+        throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphInstantiate: " + std::string(cudaGetErrorString(error)));
+      }
+      
+      // launch the graph
+      if(auto error = cudaGraphLaunch(executable_graph, stream_))
+      {
+        throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphLaunch: " + std::string(cudaGetErrorString(error)));
+      }
 
-       // create an event
-       if(auto error = cudaEventCreateWithFlags(&event_, cudaEventDisableTiming))
-       {
-         throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventCreateWithFlags: " + std::string(cudaGetErrorString(error)));
-       }
+      // create an event
+      if(auto error = cudaEventCreateWithFlags(&event_, cudaEventDisableTiming))
+      {
+        throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventCreateWithFlags: " + std::string(cudaGetErrorString(error)));
+      }
 
-       // record an event
-       if(auto error = cudaEventRecord(event_, executor().stream()))
-       {
-         throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventRecord: " + std::string(cudaGetErrorString(error)));
-       }
-    
-       // delete the graph instance
-       if(auto error = cudaGraphExecDestroy(executable_graph))
-       {
-         throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)));
-       }
+      // record an event
+      if(auto error = cudaEventRecord(event_, stream_))
+      {
+        throw std::runtime_error("basic_sender::launch: CUDA error after cudaEventRecord: " + std::string(cudaGetErrorString(error)));
+      }
+      
+      // delete the graph instance
+      if(auto error = cudaGraphExecDestroy(executable_graph))
+      {
+        throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)));
+      }
     }
 
     const Derived& derived() const
@@ -111,9 +99,7 @@ class basic_sender
       return static_cast<const Derived&>(*this);
     }
 
-    CudaGraphExecutor executor_;
-    Function function_;
-    Sender predecessor_;
+    cudaStream_t stream_;
     cudaEvent_t event_;
 };
 
