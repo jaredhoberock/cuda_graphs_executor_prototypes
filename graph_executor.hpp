@@ -1,7 +1,10 @@
 #pragma once
 
+#include <grid_index.hpp>
+#include <basic_sender.hpp>
 #include <kernel_sender.hpp>
 #include <stdexcept>
+#include <vector>
 
 
 namespace detail
@@ -9,9 +12,13 @@ namespace detail
 
 
 template<class Function>
-__global__ void single_kernel(Function f)
+__global__ void bulk_kernel(Function f)
 {
-  f();
+  // create the index
+  grid_index idx{blockIdx, threadIdx};
+
+  // invoke f
+  f(idx);
 }
 
 
@@ -26,7 +33,7 @@ class graph_executor
     {}
 
     template<class Function, class Sender>
-    kernel_sender then_execute(Function f, Sender& predecessor) const
+    kernel_sender bulk_then_execute(Function f, grid_index shape, Sender& predecessor) const
     {
       // we need to capture this array by value into the lambda below
       // so that it becomes a member of the lambda
@@ -39,9 +46,9 @@ class graph_executor
 
         cudaKernelNodeParams result
         {
-          reinterpret_cast<void*>(&detail::single_kernel<Function>),
-          1, // gridDim
-          1, // blockDim
+          reinterpret_cast<void*>(&detail::bulk_kernel<Function>),
+          shape[0], // gridDim
+          shape[1], // blockDim
           0,
 
           // XXX note that we're returning addresses which point into this lambda object here

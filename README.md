@@ -94,14 +94,14 @@ int main()
 }
 ```
 
-# `bulk_graph_executor`
+# `graph_executor`
 
-'bulk_graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
+'graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
 
 ```c++
 #include <iostream>
 #include <array>
-#include <bulk_graph_executor.hpp>
+#include <graph_executor.hpp>
 #include <void_sender.hpp>
 #include <when_all.hpp>
 
@@ -111,10 +111,10 @@ int main()
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  // Create a bulk_graph_executor from the stream.
-  bulk_graph_executor ex(stream);
+  // Create a graph_executor from the stream.
+  graph_executor ex(stream);
 
-  // bulk_graph_executor works by constructing a graph of dependent kernels.
+  // graph_executor works by constructing a graph of dependent kernels.
   // Nodes in the graph are represented as "Senders", which are an [experimental
   // C++ proposal](https://wg21.link/P1194) under consideration for future standardization.
 
@@ -138,7 +138,7 @@ int main()
   // we'll launch a single thread at each of these nodes
   grid_index shape{dim3(1), dim3(1)};
 
-  // Nodes representing kernel launches are created using bulk_graph_executor::bulk_then_execute,
+  // Nodes representing kernel launches are created using graph_executor::bulk_then_execute,
   // which defines a CUDA kernel launch dependent on another node.
 
   // Node A is represented with a "kernel_sender". This is a sender type which corresponds to a kernel launch.
