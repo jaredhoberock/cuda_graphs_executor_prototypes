@@ -94,7 +94,9 @@ int main()
 }
 ```
 
-# `bulk_graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
+# `bulk_graph_executor`
+
+'bulk_graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
 
 ```c++
 #include <iostream>
