@@ -1,4 +1,4 @@
-// $ nvcc -std=c++11 -I../.. basic_daxpy.cu
+// $ nvcc -std=c++11 -I../.. basic_daxpy.cu -o basic_daxpy
 #include <cassert>
 #include <iostream>
 #include <chrono>
@@ -17,7 +17,7 @@ void daxpy(cudaStream_t s, int n, double a, const double* x, double* y)
 {
   int block_size = 256;
   int num_blocks = (n + block_size - 1) / block_size;
-  daxpy_kernel<<<num_blocks, block_size>>>(n, a, x, y);
+  daxpy_kernel<<<num_blocks, block_size, 0, s>>>(n, a, x, y);
 }
 
 void test(size_t n)
@@ -57,9 +57,9 @@ double measure_bandwidth(size_t n, size_t num_trials = 100)
       daxpy(stream, n, a, x.data().get(), y.data().get());
     }
 
-    if(cudaError_t error = cudaDeviceSynchronize())
+    if(cudaError_t error = cudaStreamSynchronize(stream))
     {
-      throw std::runtime_error("measure_bandwidth: CUDA error after cudaDeviceSynchronize: " + std::string(cudaGetErrorString(error)));
+      throw std::runtime_error("measure_bandwidth: CUDA error after cudaStreamSynchronize: " + std::string(cudaGetErrorString(error)));
     }
   }
   auto end = std::chrono::high_resolution_clock().now();
@@ -93,7 +93,7 @@ int main(int argc, char** argv)
   double bandwidth = measure_bandwidth(n);
 
   std::clog << n << ", " << bandwidth << std::endl;
-  std::cout << "DAXPY bandwidth: " << bandwidth << " GB/s" << std::endl;
+  std::cout << "Basic DAXPY bandwidth: " << bandwidth << " GB/s" << std::endl;
   std::cout << "OK" << std::endl;
 
   return 0;
