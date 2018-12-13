@@ -1,5 +1,8 @@
 // $ nvcc -std=c++11 --expt-extended-lambda -I../.. kernel_executor_daxpy.cu -o kernel_executor_daxpy
 
+#include <cassert>
+#include <iostream>
+#include <chrono>
 #include <thrust/device_vector.h>
 #include <kernel_executor.hpp>
 
