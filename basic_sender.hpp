@@ -9,19 +9,19 @@ class basic_sender
   public:
     void submit()
     {
-      // insert into the graph
-      if(!created)
+      // create the graph if it does not yet exist
+      if(!graph_)
       {
-        if(auto error = cudaGraphCreate(&graph, 0))
+        if(auto error = cudaGraphCreate(&graph_, 0))
         {
-          throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
+          throw std::runtime_error("basic_sender::submit: CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
         }
-        derived().insert(graph);
+
+        derived().insert(graph_);
       }
 
       // launch the graph
-      launch(graph);
-
+      launch(graph_);
     }
 
     void sync_wait() const
@@ -39,42 +39,46 @@ class basic_sender
 
   protected:
     basic_sender() 
-      : event_{},
-        instantiated{false},
-        created{false}
+      : stream_{},
+        event_{},
+        graph_{},
+        executable_graph_{}
     {}
-    basic_sender(const basic_sender&)
-      : event_{},
-        instantiated{false},
-        created{false}
-    {}
+
+    basic_sender(basic_sender&& other)
+      : basic_sender()
+    {
+      std::swap(stream_, other.stream_);
+      std::swap(event_, other.event_);
+      std::swap(graph_, other.graph_);
+      std::swap(executable_graph_, other.executable_graph_);
+    }
 
     basic_sender(cudaStream_t stream)
       : stream_(stream),
         event_{},
-        instantiated{false},
-        created{false}
+        graph_{},
+        executable_graph_{}
     {}
 
     ~basic_sender()
     {
-
-      if(instantiated)
+      if(executable_graph_)
       {
-        // delete the graph instance
-        if(auto error = cudaGraphExecDestroy(executable_graph))
+        // destroy the graph instance
+        if(auto error = cudaGraphExecDestroy(executable_graph_))
         {
-          std::cerr << "basic_sender::launch: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
+          std::cerr << "basic_sender::~basic_sender: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
           std::terminate();
         }
       }
 
-      // destroy the graph
-      if(created)
+      // destroy the graph if it exists
+      if(graph_)
       {
-        if(auto error = cudaGraphDestroy(graph))
+        if(auto error = cudaGraphDestroy(graph_))
         {
-          std::cerr << "basic_sender::submit: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
+          std::cerr << "basic_sender::~basic_sender: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
           std::terminate();
         }
       }
@@ -83,18 +87,17 @@ class basic_sender
   private:
     void launch(cudaGraph_t graph)
     {
-      // instantiate the graph
-      if ( !instantiated ) 
+      // instantiate the graph if it is not already instantiated
+      if(!executable_graph_)
       {
-        if(auto error = cudaGraphInstantiate(&executable_graph, graph, nullptr, nullptr, 0))
+        if(auto error = cudaGraphInstantiate(&executable_graph_, graph_, nullptr, nullptr, 0))
         {
           throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphInstantiate: " + std::string(cudaGetErrorString(error)));
         }
-        instantiated = true;
       }
       
       // launch the graph
-      if(auto error = cudaGraphLaunch(executable_graph, stream_))
+      if(auto error = cudaGraphLaunch(executable_graph_, stream_))
       {
         throw std::runtime_error("basic_sender::launch: CUDA error after cudaGraphLaunch: " + std::string(cudaGetErrorString(error)));
       }
@@ -119,9 +122,7 @@ class basic_sender
 
     cudaStream_t stream_;
     cudaEvent_t event_;
-    bool instantiated;
-    bool created;
-    cudaGraph_t graph;
-    cudaGraphExec_t executable_graph{};
+    cudaGraph_t graph_;
+    cudaGraphExec_t executable_graph_{};
 };
 
