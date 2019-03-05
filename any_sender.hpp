@@ -7,12 +7,6 @@
 class any_sender
 {
   private:
-    template<class Sender>
-    static cudaGraphNode_t insert(const Sender& sender, cudaGraph_t g)
-    {
-      return sender.insert(g);
-    }
-
     struct sender
     {
       virtual ~sender() = default;
@@ -30,7 +24,7 @@ class any_sender
 
       virtual cudaGraphNode_t insert(cudaGraph_t g) const
       {
-        return any_sender::insert(sender_, g);
+        return sender_.insert(g);
       }
 
       virtual void submit()
