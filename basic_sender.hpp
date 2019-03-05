@@ -63,9 +63,9 @@ class basic_sender
 
     ~basic_sender()
     {
+      // destroy the graph instance if it exists
       if(executable_graph_)
       {
-        // destroy the graph instance
         if(auto error = cudaGraphExecDestroy(executable_graph_))
         {
           std::cerr << "basic_sender::~basic_sender: CUDA error after cudaGraphExecDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
@@ -79,6 +79,16 @@ class basic_sender
         if(auto error = cudaGraphDestroy(graph_))
         {
           std::cerr << "basic_sender::~basic_sender: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
+          std::terminate();
+        }
+      }
+
+      // destroy the event if it exists
+      if(event_)
+      {
+        if(auto error = cudaEventDestroy(event_))
+        {
+          std::cerr << "basic_sender::~basic_sender: CUDA error after cudaEventDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
           std::terminate();
         }
       }
