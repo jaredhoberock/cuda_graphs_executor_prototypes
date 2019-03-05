@@ -177,6 +177,40 @@ int main()
     assert(expected_result == result);
   }
 
+  // Test Host and Memcpy Nodes
+  int *a_h, *a_d;
+  int N=100;
+  a_h = (int*)malloc(N * sizeof(int));
+  cudaMallocHost((void**)&a_d,N * sizeof(int));
+
+  graph_executor ex(stream);
+
+  void_sender root_node;
+  auto host_node = ex.host_then_execute([&]()
+      { 
+        for (int i=0; i < N; ++i)
+        {
+          a_h[i] = i;
+        }
+      }, root_node);
+  auto h2d_node = ex.copy_then_execute(a_d, a_h, N,
+      cudaMemcpyHostToDevice, host_node);
+  auto device_node = ex.bulk_then_execute([=] __device__ (grid_index idx)
+      {
+        int ix = blockDim.x * blockIdx.x + threadIdx.x;
+        a_d[ix] = 2 * a_d[ix];
+      }, grid_index{dim3(1,1,1),dim3(N,1,1)},
+      h2d_node);
+  auto d2h_node = ex.copy_then_execute(a_h, a_d, N,
+      cudaMemcpyDeviceToHost, device_node);
+  d2h_node.submit();
+  d2h_node.sync_wait();
+
+  for ( int i=0; i<N; ++i ) 
+  {
+    assert( a_h[i] == 2*i );
+  }
+
   if(auto error = cudaStreamDestroy(stream))
   {
     throw std::runtime_error("CUDA error after cudaStreamDestroy(): " + std::string(cudaGetErrorString(error)));

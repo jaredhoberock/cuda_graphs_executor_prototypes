@@ -3,9 +3,12 @@
 #include <grid_index.hpp>
 #include <basic_sender.hpp>
 #include <kernel_sender.hpp>
+#include <host_sender.hpp>
+#include <copy_sender.hpp>
 #include <stdexcept>
 #include <vector>
 
+#include <cuda_runtime.h>
 
 namespace detail
 {
@@ -31,6 +34,44 @@ class graph_executor
     graph_executor(cudaStream_t s)
       : stream_(s)
     {}
+
+    template<typename T, class Sender>
+    copy_sender copy_then_execute(T *dst, T *src, unsigned long sz, cudaMemcpyKind kind, Sender& predecessor) const
+    {
+      auto node_parameters_function = [=]() mutable
+      {
+        cudaMemcpy3DParms result;
+        result.dstArray = NULL;
+        result.dstPos = make_cudaPos(0,0,0);
+        result.dstPtr = make_cudaPitchedPtr(dst, sz*sizeof(T), sz, 1);
+        result.extent = make_cudaExtent(sz*sizeof(T), 1, 1);
+        result.kind = kind;
+        result.srcArray = NULL;
+        result.srcPos = make_cudaPos(0,0,0);
+        result.srcPtr = make_cudaPitchedPtr(src, sz*sizeof(T), sz, 1);
+
+        return result;
+      };
+
+      return {stream(), node_parameters_function, std::move(predecessor)};
+    }
+
+    template<class Function, class Sender>
+    host_sender host_then_execute(Function f, Sender& predecessor) const
+    {
+      auto node_parameters_function = [=]() mutable
+      {
+        cudaHostNodeParams result
+        {
+          [](void *userData) { (*static_cast<decltype(f)*>(userData))();},
+          (void*)&f
+        };
+
+        return result;
+      };
+
+      return {stream(), node_parameters_function, std::move(predecessor)};
+    }
 
     template<class Function, class Sender>
     kernel_sender bulk_then_execute(Function f, grid_index shape, Sender& predecessor) const
