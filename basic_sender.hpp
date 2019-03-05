@@ -9,7 +9,14 @@ class basic_sender
     void submit()
     {
       // insert into the graph
-      derived().insert(graph);
+      if(!created)
+      {
+        if(auto error = cudaGraphCreate(&graph, 0))
+        {
+          throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
+        }
+        derived().insert(graph);
+      }
 
       // launch the graph
       launch(graph);
@@ -32,37 +39,25 @@ class basic_sender
   protected:
     basic_sender() 
       : event_{},
-        instantiated{false}
-    {
-      if(auto error = cudaGraphCreate(&graph, 0))
-      {
-        throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
-      }
-    }
+        instantiated{false},
+        created{false}
+    {}
     basic_sender(const basic_sender&)
       : event_{},
-        instantiated{false}
-    {
-      if(auto error = cudaGraphCreate(&graph, 0))
-      {
-        throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
-      }
-    }
+        instantiated{false},
+        created{false}
+    {}
 
     basic_sender(cudaStream_t stream)
       : stream_(stream),
         event_{},
-        instantiated{false}
-    {
-      if(auto error = cudaGraphCreate(&graph, 0))
-      {
-        throw std::runtime_error("CUDA error after cudaGraphCreate: " + std::string(cudaGetErrorString(error)));
-      }
-    }
+        instantiated{false},
+        created{false}
+    {}
 
     ~basic_sender()
     {
-      
+
       if(instantiated)
       {
         // delete the graph instance
@@ -74,10 +69,13 @@ class basic_sender
       }
 
       // destroy the graph
-      if(auto error = cudaGraphDestroy(graph))
+      if(created)
       {
-        std::cerr << "basic_sender::submit: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
-        std::terminate();
+        if(auto error = cudaGraphDestroy(graph))
+        {
+          std::cerr << "basic_sender::submit: CUDA error after cudaGraphDestroy: " + std::string(cudaGetErrorString(error)) << std::endl;
+          std::terminate();
+        }
       }
     }
 
@@ -121,6 +119,7 @@ class basic_sender
     cudaStream_t stream_;
     cudaEvent_t event_;
     bool instantiated;
+    bool created;
     cudaGraph_t graph;
     cudaGraphExec_t executable_graph{};
 };
