@@ -43,8 +43,9 @@ class any_sender
     std::unique_ptr<sender> sender_;
 
   public:
-    any_sender(const any_sender&) = delete;
+    any_sender() = default;
     any_sender(any_sender&&) = default;
+    any_sender(const any_sender&) = delete;
 
     template<class Sender>
     any_sender(Sender&& sender)
@@ -53,16 +54,31 @@ class any_sender
 
     cudaGraphNode_t insert(cudaGraph_t g) const
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::insert: invalid state.");
+      }
+
       return sender_->insert(g);
     }
 
     void submit()
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::submit: invalid state.");
+      }
+
       sender_->submit();
     }
 
     void sync_wait() const
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::sync_wait: invalid state.");
+      }
+
       sender_->sync_wait();
     }
 };
