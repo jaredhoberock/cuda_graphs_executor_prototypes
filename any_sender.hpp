@@ -52,6 +52,8 @@ class any_sender
       : sender_(new erased_sender<typename std::decay<Sender>::type>(std::forward<Sender>(sender)))
     {}
 
+    any_sender& operator=(any_sender&& other) = default;
+
     cudaGraphNode_t insert(cudaGraph_t g) const
     {
       if(!sender_)
