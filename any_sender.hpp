@@ -7,12 +7,6 @@
 class any_sender
 {
   private:
-    template<class Sender>
-    static cudaGraphNode_t insert(const Sender& sender, cudaGraph_t g)
-    {
-      return sender.insert(g);
-    }
-
     struct sender
     {
       virtual ~sender() = default;
@@ -30,7 +24,7 @@ class any_sender
 
       virtual cudaGraphNode_t insert(cudaGraph_t g) const
       {
-        return any_sender::insert(sender_, g);
+        return sender_.insert(g);
       }
 
       virtual void submit()
@@ -49,26 +43,44 @@ class any_sender
     std::unique_ptr<sender> sender_;
 
   public:
-    any_sender(const any_sender&) = delete;
+    any_sender() = default;
     any_sender(any_sender&&) = default;
+    any_sender(const any_sender&) = delete;
 
     template<class Sender>
     any_sender(Sender&& sender)
       : sender_(new erased_sender<typename std::decay<Sender>::type>(std::forward<Sender>(sender)))
     {}
 
+    any_sender& operator=(any_sender&& other) = default;
+
     cudaGraphNode_t insert(cudaGraph_t g) const
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::insert: invalid state.");
+      }
+
       return sender_->insert(g);
     }
 
     void submit()
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::submit: invalid state.");
+      }
+
       sender_->submit();
     }
 
     void sync_wait() const
     {
+      if(!sender_)
+      {
+        throw std::runtime_error("any_sender::sync_wait: invalid state.");
+      }
+
       sender_->sync_wait();
     }
 };
