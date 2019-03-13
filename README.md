@@ -96,7 +96,7 @@ int main()
 
 # `graph_executor`
 
-'graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
+`graph_executor` constructs a graph of dependent kernels, which may be launched lazily:
 
 ```c++
 #include <iostream>
